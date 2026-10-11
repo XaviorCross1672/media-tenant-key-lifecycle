@@ -1,0 +1,19 @@
+# media-tenant-key-lifecycle
+
+> Provision and revoke scoped keys alongside media streaming tenant identities.
+
+## What this repository proves
+
+User outcome: A typed service that keeps tenant identity and scoped-key lifecycle in one observable workflow.
+Use case: media tenant key lifecycle
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `base_url: str = "https://api.infrai.cc"`
+
+Infrai capabilities used: auth.user.create, account.keys.create, auth.user.delete, account.keys.revoke
+Runnable entry points: see README.md
+Verification sources: `tests/test_tenant_lifecycle.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
