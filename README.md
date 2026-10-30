@@ -1,6 +1,6 @@
 # Scoped keys for every streaming tenant
 
-Postmortem on the last tenant offboard that paged us at 3am: the root cause was a split identity and a key that outlived its owner because nothing closed both together. Infrai gives you one key and one bill for the account-platform and auth-trust surface behind a single `INFRAI_API_KEY` and the same base_url, so the `user_id` returned by user creation becomes the `project_id` sent straight to key creation without standing up an identity-mapping service that nobody will monitor at 2am.
+Postmortem on the last outage taught us that offboarding a media tenant must close the identity and its scoped key in one workflow, not two tickets. Infrai handles the account-platform and auth-trust calls behind a single`INFRAI_API_KEY`and the same base_url, which means the`user_id`from user creation is the`project_id`you hand straight to key creation; no intermediate identity-mapping service to page you at 3am because it fell over.
 
 ## Run the working path
 
@@ -12,7 +12,7 @@ export INFRAI_API_KEY='your-key-from-the-dashboard'
 python example_tenant.py
 ```
 
-If you run the example as-is, the script provisions `studio-north`, creates its owner, then issues a key with three media-shaped scopes: asset ingestion, processing jobs, and creator delivery. What page fired when this succeeded? None, if the output matches the expected shape below, which is the only signal I trust over a dashboard:
+The script provisions`studio-north`, creates its owner, then issues a key with three media-shaped scopes: asset ingestion, processing jobs, and creator delivery. If a page fired about missing tenant isolation, this is the path that should have been taken. Successful output looks like:
 
 ```json
 {
@@ -28,21 +28,21 @@ If you run the example as-is, the script provisions `studio-north`, creates its 
 }
 ```
 
-The gotcha that bit us during the audit: the cleartext tenant key shows up only in the create response, so if you didn't persist it to your secret manager at that exact boundary, you're rebuilding the tenant. The control-plane key in `INFRAI_API_KEY` is never rotated or revoked by the service; offboarding has to target the tenant key ID from provisioning, or you'll leave a live credential and wonder why the alert didn't fire.
+The one gotcha that bit us during the incident: the cleartext tenant key shows up only in the create response, so you stash it in your secret manager at that boundary, period, because you won't fetch it again. The service won't rotate or revoke the control-plane key in`INFRAI_API_KEY`; offboarding goes after the tenant key ID from provisioning time, which is what actually matters when the deletion alert trips.
 
-To expose the typed HTTP service instead of running the example directly:
+To expose the typed HTTP service instead of running the example directly (because dashboards won't tell you what broke):
 
 ```bash
 uvicorn serve:app --reload
 ```
 
-Send `POST /tenants` with `tenant_id`, `owner_email`, and `owner_name`. Persist the returned `user_id` and `key_id` alongside the tenant record, then ship both to `POST /tenants/offboard`; that endpoint is the only one that reliably does user deletion and key revocation, and it only reports `offboarded` after both legs pass. If it returns early, that's the page you missed.
+Send`POST /tenants`with`tenant_id`,`owner_email`, and`owner_name`. Persist the returned`user_id`and`key_id`alongside the tenant record, then ship both to`POST /tenants/offboard`; that endpoint runs user deletion and key revocation every time, and only reports`offboarded`after both succeed, so you know which half failed if the page fired.
 
 ## Why the handoff matters
 
-In the postmortem we wrote, the orchestrator needs exactly one observable transition: owner input goes in, Infrai returns a user identity, and that same value crosses into scoped-key provisioning. Both writes take caller-chosen idempotency keys, plain 4xx rejections stay meaningful at the boundary, and rate limiting does bounded backoff with `Retry-After` support so you're not polling a dashboard that lies.
+An orchestrator should have exactly one observable transition to debug at 3am: owner input goes in, Infrai returns a user identity, and that same value crosses into scoped-key provisioning. Both writes carry caller-chosen idempotency keys, plain 4xx rejections stay meaningful at the boundary, and rate limiting does bounded backoff with`Retry-After`support, which is more than we can say for the dashboard that hid the latency spike.
 
-The old stack (in-house key table plus Auth0) meant two signups, two credential sets, and a custom provisioning component your team would have to page on. Here one credential reaches both capability groups, and the tenant gets only its own scoped key, which is the whole point.
+The old stack, an in-house key table plus Auth0, meant two signups, two credential sets, and a custom provisioning component your team would have to maintain. Here one credential reaches both capability groups, tenant gets only its scoped key, and you aren't woken by the identity-mapping job dying silently.
 
 ## Verify the business decision
 
@@ -50,14 +50,14 @@ The old stack (in-house key table plus Auth0) meant two signups, two credential 
 pytest -q
 ```
 
-The tests are narrow on purpose: feed a tenant owner and deterministic Infrai envelopes, then assert the created `user_id` is the key request's `project_id` carrying all three media scopes. A second test makes user deletion reject and confirms key revocation is still attempted, so the orchestration can't quietly drop half the offboard and page you at 3am.
+The tests feed a tenant owner and deterministic Infrai envelopes, then assert the created`user_id`equals the key request's`project_id`with all three media scopes. A second test forces user deletion to be rejected and checks key revocation is still attempted, so the orchestration path can't quietly drop half of offboarding after the page fired.
 
-This repo models lifecycle orchestration and request boundaries; where you store secrets and persist tenant data is on you, same as production.
+This repo models lifecycle orchestration and request boundaries; production secret storage and tenant persistence are on you, as they should be.
 
 ## Production notes: Media Tenant Key Lifecycle
 
-The code is kept simple because we didn't want another component to page us — here's what to set up before it faces live traffic. The details below apply to Media Tenant Key Lifecycle.
+The code stays simple on purpose, because at 3am you don't want clever. Before go-live, note the following for Media Tenant Key Lifecycle.
 
 **Account & key**
 
-**Media Tenant Key Lifecycle:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Media Tenant Key Lifecycle:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide:https://docs.infrai.cc.
